@@ -1,6 +1,7 @@
 import streamlit as st
 from google.adk.agents.loop_agent import LoopAgent
 from google.adk.agents.llm_agent import LlmAgent
+from google.adk.tools import google_search
 from google.genai import types
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
@@ -20,7 +21,7 @@ st.markdown("*Transform your rough ideas into compelling, concise pitches with A
 APP_NAME = "pitch_refiner_app_v2_critic_first_minimal" # Updated app name
 USER_ID = "dev_user_01"
 # IMPORTANT: Replace with a valid Gemini model name available in your environment
-GEMINI_MODEL = "gemini-1.5-flash-latest" # Or "gemini-1.0-pro", etc.
+GEMINI_MODEL = "gemini-2.0-flash" # Or "gemini-1.0-pro", etc.
 
 # --- State Keys ---
 STATE_CURRENT_PITCH = "current_pitch"
@@ -51,12 +52,12 @@ with col2:
     # Number of iterations (Each iteration = Critic + Writer)
     # Note: The loop will run Critic, Writer, Critic, Writer... ending after Writer.
     # Updated slider label
-    num_iterations = st.slider("Refinement Iterations (Critique + Write cycles):", min_value=1, max_value=3, value=2)
+    num_iterations = st.slider("Refinement Iterations (Critique + Write cycles):", min_value=1, max_value=5, value=2)
 
-# Function to setup and run agent
+# Function to set up and run agent
 def setup_and_run_agent(initial_pitch, target_audience, num_iterations):
     """Sets up and runs the ADK agents for pitch refinement."""
-    debug_logs = [] # Initialize list to store debug messages
+    debug_logs = [] # Initialize a list to store debug messages
 
     # Create a unique session ID for each run to avoid state conflicts
     session_id = f"session_{uuid.uuid4()}"
@@ -71,31 +72,32 @@ def setup_and_run_agent(initial_pitch, target_audience, num_iterations):
     # --- Agent Definitions ---
 
     # Critic Agent (LlmAgent) - Runs FIRST in the loop now
-    # Instruction still asks to read from state, but maybe it gets initial message implicitly?
+    # Instruction still asks to read from state, but maybe it gets an initial message implicitly?
     critic_agent = LlmAgent(
         name="PitchCritic",
         model=GEMINI_MODEL,
         instruction=f"""
         You are an expert Pitch Coach specialized in elevator speech refinement.
-
-        **Your Task:** Review the pitch provided. If state variable '{STATE_CURRENT_PITCH}' exists, use that. Otherwise, use the initial input message.
-        Provide specific, actionable feedback (2-3 points) to make it more compelling
-        for the target audience: {target_audience}.
-
-        **Focus Areas:**
-        - Clarity: Is the value proposition immediately clear?
-        - Impact: Does it create interest and engagement?
-        - Conciseness: Is it focused and free of unnecessary details?
-        - Audience fit: Is it appropriate for {target_audience}?
-
-        **Audience Considerations ({target_audience}):**
-         - Investors: Look for market potential, ROI, competitive advantage.
-         - Customers: Look for benefits, problem-solving, emotional appeal.
-         - General Audience: Look for accessible language, relatable examples.
-         - Technical Team: Look for technical differentiators, feasibility.
-         - Executive Leadership: Look for strategic alignment, scalability, business impact.
-
-        **Output:** Output ONLY your feedback (e.g., a list of points) without explanations or commentary. Do not output the pitch itself.
+        
+        **Your Task**:
+        Review the pitch provided. If the state variable {STATE_CURRENT_PITCH} exists, use that. Otherwise, use the initial input message.
+        Provide 4–5 specific, actionable feedback points to make the pitch more compelling for the target audience: {target_audience}.
+        
+        **Focus Areas**:
+        Clarity – Is the value proposition immediately understandable?
+        Impact – Does it spark interest and engagement?
+        Conciseness – Is it focused and free of unnecessary detail?
+        Audience Fit – Is it relevant and persuasive for the intended audience?
+        
+        **Audience Considerations ({target_audience})**:
+        Investors – Emphasize market size, scalability, ROI, competitive edge, and clarity of the business model.
+        Customers – Highlight key benefits, problem-solving value, and emotional appeal.
+        General Audience – Use plain language, relatable examples, and simple storytelling.
+        Technical Team – Focus on technical differentiators, feasibility, and integration challenges.
+        Executive Leadership – Emphasize strategic alignment, scalability, business impact, and implementation risk.
+        
+        **Output**:
+        Only output your feedback as a bullet-point list. Do not repeat or quote the pitch. Avoid explanations or commentary.
         """,
         description="Reviews and critiques the pitch.",
         output_key=STATE_FEEDBACK  # Saves critique to state
@@ -108,23 +110,32 @@ def setup_and_run_agent(initial_pitch, target_audience, num_iterations):
         model=GEMINI_MODEL,
         instruction=f"""
         You are an expert Pitch Writer specialized in creating compelling elevator speeches.
-
-        **Your Task:**
-        1. Read the current pitch from the '{STATE_CURRENT_PITCH}' state variable (this should exist after the critic runs, even if it's the first draft).
-        2. Read the feedback provided in the '{STATE_FEEDBACK}' state variable.
-        3. Refine the pitch based *only* on the provided feedback to make it clear, concise (30-45 words),
-           and highlight the unique value proposition for the target audience: {target_audience}.
-
-        **Audience Focus ({target_audience}):**
-         - Investors: Focus on market potential, ROI, and competitive advantage.
-         - Customers: Emphasize benefits, problem-solving aspects, and emotional appeal.
-         - General Audience: Use accessible language and relatable examples.
-         - Technical Team: Include relevant technical differentiators and implementation feasibility.
-         - Executive Leadership: Highlight strategic alignment, scalability, and business impact.
-
-        **Output:** Output ONLY the single, refined pitch without explanations or commentary.
+        
+        **Your Task**:
+        Read the current pitch from the {STATE_CURRENT_PITCH} state variable (this should exist after the critic runs, even if it's the first draft).
+        Read the feedback provided in the {STATE_FEEDBACK} state variable.
+        Rewrite the pitch strictly based on the feedback, making it:
+        Clear and engaging
+        Concise (30–45 words max)
+        Focused on the unique value proposition for the target audience: {target_audience}
+        May use of the search tool for look up relevant data for the pitch
+        
+        **Audience Considerations ({target_audience})**:
+        Investors – Emphasize market opportunity, return potential, scalability, and competitive edge.
+        Customers – Emphasize pain point solved, direct benefits, and emotional resonance.
+        General Audience – Use simple language, universal relevance, and a relatable hook.
+        Technical Team – Highlight key technologies, feasibility, and technical advantages.
+        Executive Leadership – Focus on strategic fit, business value, long-term impact, and low disruption.
+        
+        **Constraints**:
+        Do not invent new concepts or features not implied or mentioned in the original pitch or feedback.
+        The pitch should be self-contained and easy to read aloud.
+        
+        **Output**:
+        Return only the single revised pitch (30–45 words). No explanations, commentary, or formatting.
         """,
         description="Refines the pitch based on feedback from session state.",
+        tools=[google_search],
         output_key=STATE_CURRENT_PITCH  # Saves refined pitch back to state, overwriting previous
     )
     debug_logs.append("Writer Agent defined (runs second).")
@@ -313,7 +324,7 @@ if st.session_state.history:
     # Evolution of the pitch
     st.subheader("Pitch Evolution")
 
-    # Group agent outputs by iteration (Critic + Writer = 1 iteration)
+    # Group agent outputs by iteration (Critic plus Writer = 1 iteration)
     iterations_display = []
     current_iter_display = {}
 
